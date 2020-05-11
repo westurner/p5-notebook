@@ -2,11 +2,15 @@ import { Contents as ServerContents } from '@jupyterlab/services';
 
 import { INotebookContent } from '@jupyterlab/nbformat';
 
+import { StateDB } from '@jupyterlab/statedb';
+
 import { Router } from './router';
 
 import { IJupyterServer } from '../tokens';
 
 import DEFAULT_NB from '../resources/default.ipynb';
+
+import { LocalStorageConnector } from '../storage';
 
 /**
  * A class to handle requests to /api/contents
@@ -16,6 +20,11 @@ export class Contents implements IJupyterServer.IRoutable {
    * Construct a new Contents.
    */
   constructor() {
+    const connector = new LocalStorageConnector('contents');
+    this._storage = new StateDB<string>({
+      connector
+    });
+
     this._router.add(
       'GET',
       '/api/contents/(.*)/checkpoints',
@@ -25,26 +34,19 @@ export class Contents implements IJupyterServer.IRoutable {
     );
     this._router.add('GET', Private.FILE_NAME_REGEX, async (req: Request) => {
       const filename = Private.parseFilename(req.url);
-      const nb = this.get(filename);
-      return new Response(JSON.stringify(nb));
+      const response = await this._createNotebookResponse(filename);
+      if (response) {
+        return new Response(JSON.stringify(response));
+      }
+      return new Response(JSON.stringify(Private.DEFAULT_NOTEBOOK));
     });
     this._router.add('PUT', Private.FILE_NAME_REGEX, async (req: Request) => {
       const filename = Private.parseFilename(req.url);
-      const nb = this.get(filename);
-      return new Response(JSON.stringify(nb));
+      const raw = await req.text();
+      this._storage.save(filename, raw);
+      const response = await this._createNotebookResponse(filename);
+      return new Response(JSON.stringify(response), { status: 200 });
     });
-  }
-
-  /**
-   * Get a notebook by name.
-   *
-   * @param name The name of the notebook.
-   */
-  get(name: string): ServerContents.IModel {
-    if (name === 'example.ipynb') {
-      return Private.DEFAULT_NOTEBOOK;
-    }
-    return Private.EMPTY_NOTEBOOK;
   }
 
   /**
@@ -56,7 +58,37 @@ export class Contents implements IJupyterServer.IRoutable {
     return this._router.route(req);
   }
 
+  /**
+   * Create the response for retrieving a notebook.
+   *
+   * @param filename
+   * @param req The request to dispatch.
+   */
+  private async _createNotebookResponse(
+    filename: string
+  ): Promise<ServerContents.IModel | null> {
+    const nb = await this._storage.fetch(filename);
+    if (!nb) {
+      return null;
+    }
+    // const modified = new Date();
+    return {
+      name: filename,
+      path: filename,
+      // last_modified: modified.toISOString(),
+      last_modified: '2020-03-18T18:51:01.243007Z',
+      created: '2020-03-18T18:41:01.243007Z',
+      content: JSON.parse(nb),
+      format: 'json',
+      mimetype: '',
+      size: nb.length,
+      writable: true,
+      type: 'notebook'
+    };
+  }
+
   private _router = new Router();
+  private _storage: StateDB<string>;
 }
 
 /**
